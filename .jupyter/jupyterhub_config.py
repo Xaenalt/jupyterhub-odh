@@ -237,7 +237,24 @@ def apply_pod_profile(spawner, pod):
   spawner.single_user_profiles.load_profiles(username=spawner.user.name)
   profile = spawner.single_user_profiles.get_merged_profile(spawner.image, user=spawner.user.name, size=spawner.deployment_size)
   gpu_types = spawner.single_user_profiles.get_gpu_types()
-  return SingleuserProfiles.apply_pod_profile(spawner.user.name, pod, profile, gpu_types, DEFAULT_MOUNT_PATH, spawner.gpu_mode)
+  pod = SingleuserProfiles.apply_pod_profile(spawner.user.name, pod, profile, gpu_types, DEFAULT_MOUNT_PATH, spawner.gpu_mode)
+  # If user hasn't requested a GPU, set an affinity to prefer non-GPU nodes
+  notebook_container = [container for container in pod.spec.containers if container.name == 'notebook'][0]
+  if 'nvidia.com/gpus' not in notebook_container.resources.requests:
+    if 'preferredDuringSchedulingIgnoredDuringExecution' in pod.spec.affinity['nodeAffinity']:
+      # If there is a preferredDuringSchedulingIgnoredDuringExecution option, add this preference
+      pod.spec.affinity['nodeAffinity']['preferredDuringSchedulingIgnoredDuringExecution'] += {
+        'preference': {'matchExpressions': [{
+          'key': 'nvidia.com/gpu.present', 'operator': 'NotIn', 'values': ['true']}]},
+        'weight': 1}
+    else:
+      # If affinity key doesn't exist, add it
+      pod.spec.affinity['nodeAffinity'] = {**pod.spec.affinity['nodeAffinity'], **{
+        'preferredDuringSchedulingIgnoredDuringExecution': [{
+          'preference': {'matchExpressions': [{
+            'key': 'nvidia.com/gpu.present', 'operator': 'NotIn', 'values': ['true']}]},
+          'weight': 1}]}}
+  return pod
 
 def setup_environment(spawner):
     spawner.set_from_profile()
